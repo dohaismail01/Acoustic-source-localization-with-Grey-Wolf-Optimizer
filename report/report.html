@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GWO Acoustic Source Localization</title>
+<style>
+  @page { size: A4; margin: 15mm 16mm 15mm 16mm; }
+  :root { --ink:#1b1b1a; --muted:#5a5954; --rule:#d9d8d2; --accent:#2a78d6; }
+  body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 9.6pt;
+         line-height: 1.38; color: var(--ink); background:#fff; margin: 0; }
+  h1 { font-size: 16pt; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 9pt; margin-bottom: 8px; }
+  h2 { font-size: 11.5pt; margin: 12px 0 4px; border-bottom: 1px solid var(--rule);
+       padding-bottom: 2px; color: var(--accent); }
+  h3 { font-size: 10pt; margin: 8px 0 3px; }
+  p { margin: 3px 0 5px; text-align: justify; }
+  ul { margin: 2px 0 5px 0; padding-left: 18px; } li { margin: 1px 0; }
+  .eq { font-family: "Cambria Math", "Cambria", Georgia, serif; font-size: 10.2pt;
+        text-align: center; margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 8.5pt; margin: 4px 0 6px; }
+  th, td { border-bottom: 1px solid var(--rule); padding: 2px 5px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { background: #f3f2ee; font-weight: 600; }
+  figure { margin: 6px 0 8px; page-break-inside: avoid; }
+  figure img { width: 100%; display: block; }
+  figcaption { font-size: 8.4pt; color: var(--muted); margin-top: 2px; }
+  .two { display: flex; gap: 10px; } .two > * { flex: 1; }
+  .box { background:#f6f5f1; border-left: 3px solid var(--accent); padding: 4px 8px; margin: 6px 0; }
+  .avoid { page-break-inside: avoid; }
+  code { font-size: 8.8pt; }
+</style>
+</head>
+<body>
+
+<h1>Acoustic Source Localization with Unknown Attenuation using the Grey Wolf Optimizer</h1>
+<div class="sub">Swarm Intelligence mini-project · Grey Wolf Optimizer (continuous encoding) · primary seed 4612 ·
+code: <code>gwo_acoustic.ipynb</code></div>
+
+<h2>1. Introduction</h2>
+<p>A sound source somewhere in a 50 × 50 × 10 m hall is recorded by a microphone array. From the
+sound-pressure levels alone we want its 3-D position, its source level <i>S</i> and the propagation
+attenuation α — five continuous unknowns, coupled non-linearly through distance and corrupted by
+measurement noise. The misfit landscape is smooth but contains a long, flat, curved valley (S, α and
+range can partly compensate each other) and an obstacle the source cannot be inside. We solve it with a
+from-scratch Grey Wolf Optimizer (GWO), compare it with random search at an identical budget,
+study its parameters, stress it with more noise and fewer microphones, and ablate its three-leader
+guidance. Every number below is reproducible from seed 4612.</p>
+
+<h2>2. Problem formulation</h2>
+<p><b>Instance (seed 4612).</b> One generator <code>default_rng(4612)</code> draws, in order: the obstacle
+(edges U[4–12, 4–12, 3–7] m, standing on the floor) → the true source (rejection-sampled 1–4 m outside
+the box) → <i>S</i> ~ U(85,105) dB → α ~ U(0.05,0.30) dB/m → 20 microphones uniform in the hall (outside
+the box) → noise shape z<sub>i</sub> ~ N(0,1) → the 4 microphones removed in the stress test. Result:
+box [30.0, 37.9] × [22.9, 34.4] × [0, 5.7] m; source s = (29.75, 21.85, 1.11) m, 1.09 m from the box;
+S = 93.47 dB; α = 0.0842 dB/m; removed microphones {0, 14, 18, 19}. Noise at level σ is ε<sub>i</sub> = σz<sub>i</sub>.</p>
+<p><b>Variables</b> x = [s<sub>x</sub>, s<sub>y</sub>, s<sub>z</sub>, S, α]. <b>Model</b> and <b>objective</b>:</p>
+<div class="eq">L<sub>i</sub><sup>pred</sup>(x) = S − 20·log<sub>10</sub> r<sub>i</sub> − α·r<sub>i</sub>,&nbsp;&nbsp;
+r<sub>i</sub> = max(‖m<sub>i</sub> − s‖, 0.1 m),&nbsp;&nbsp;&nbsp;
+f(x) = (1/N) Σ<sub>i</sub> (L<sub>i</sub><sup>meas</sup> − L<sub>i</sub><sup>pred</sup>(x))²&nbsp; [dB²]</div>
+<p>Under Gaussian noise the minimiser of f is the maximum-likelihood (ML) estimate and f(x<sub>true</sub>) ≈ σ².
+<b>Constraints:</b> (a) bounds x,y ∈ [0,50] m, z ∈ [0,10] m, S ∈ [60,120] dB; (b) 0 ≤ α ≤ α<sub>max</sub> = 0.5 dB/m;
+(c) source outside the obstacle box B.</p>
+<div class="eq">F(x) = f(x) + λ<sub>obs</sub>·d<sub>B</sub>(s)² + λ<sub>α</sub>·[max(0, −α) + max(0, α − α<sub>max</sub>)]²</div>
+<p><b>Constraint handling.</b> (a) by <i>reflection</i> at the violated bound after every move (then clipping),
+which avoids wolves piling up on the boundary. The α encoding box is [−0.05, 0.55], wider than the
+physical range, so (b) and (c) are penalised. d<sub>B</sub> is the <i>penetration depth</i>: distance to the
+nearest escapable face (0 outside; the floor face is not escapable, and a point on the floor under the box is
+inside). <b>λ choice:</b> λ<sub>obs</sub> = 10² dB²/m², λ<sub>α</sub> = 10⁴ dB²/(dB/m)² make a violation of one
+resolution unit (0.1 m, 0.01 dB/m) cost ≈ σ² = 1 dB² — the noise floor — whereas 1 m inside the box costs
+100 dB², more than nearly any feasible misfit. <b>Why graded, not a death penalty:</b> a constant/infinite penalty
+creates a flat plateau over the obstacle that gives the leaders no direction back to feasibility; the squared
+depth is zero with zero slope on the surface (feasible boundary solutions are undistorted) and grows smoothly
+inside, so the pack can cross the obstacle region while exploring and is pushed out proportionally.</p>
+<p><b>Analysis tools</b> (never given to the optimisers): the reference optimum F*, x<sub>ML</sub> from 200-start
+L-BFGS-B, and the Cramér–Rao bound (CRB) J⁻¹ with J = GᵀG/σ², G = ∂L<sup>pred</sup>/∂x, which gives the best
+achievable unbiased position RMSE and the parameter correlations. Base case: CRB position RMSE 3.4 m, dominated
+by z (σ<sub>z</sub> = 3.2 m vs σ<sub>x</sub> = 0.97, σ<sub>y</sub> = 0.58 m — the array spans only 10 m vertically);
+corr(S, α) = 0.94; cond(G) ≈ 340.</p>
+
+<h2>3. Method</h2>
+<p><b>GWO.</b> The three best positions found so far are the leaders α, β, δ (elitist: best three of old leaders ∪
+new pack); every wolf X moves to the average of three leader-guided points,</p>
+<div class="eq">A = 2a·r₁ − a,&nbsp; C = 2·r₂,&nbsp; D<sub>p</sub> = |C·X<sub>p</sub> − X|,&nbsp; X′<sub>p</sub> = X<sub>p</sub> − A·D<sub>p</sub>,&nbsp;
+X(t+1) = (X′<sub>α</sub> + X′<sub>β</sub> + X′<sub>δ</sub>)/3</div>
+<p>with r₁, r₂ ~ U(0,1) per wolf, leader and dimension, and a(t) decreasing from a₀ to 0: linear a₀(1−τ),
+nonlinear a₀(1−τ²) or exponential a₀(e<sup>−5τ</sup>−e<sup>−5</sup>)/(1−e<sup>−5</sup>), τ = t/(T−1). |A| &gt; 1 (only possible while a &gt; 1)
+throws a wolf beyond its leader — exploration; |A| &lt; 1 lands it between itself and the leader — exploitation.
+The pack is updated as one vectorised NumPy operation, bounds are reflected after every update and every
+evaluation is logged. The <b>ablation</b> uses X(t+1) = X′<sub>α</sub> only. <b>Baseline:</b> pure random search,
+uniform in the same encoding box, same objective F, same budget, same per-evaluation log and seeds.</p>
+
+<h2>4. Experimental setup</h2>
+<p><b>Budget:</b> 9,000 evaluations for every method and setting (30 wolves × [1 + 299] iterations; N = 10 → 899
+iterations, N = 60 → 149). <b>Runs:</b> 30 per method/setting, run k uses <code>default_rng(4612 + k)</code>
+(common random numbers). <b>Metrics:</b> F statistics; localisation error ‖ŝ − s‖; |Ŝ − S|, |α̂ − α|; success =
+final estimate within 1 m of x<sub>ML</sub>; speed = evaluations until best-so-far F ≤ F* + 0.1σ², and evaluations
+after which the incumbent stays within 3 m (≈ base CRB) of the source; Wilcoxon rank-sum tests.
+<b>Sensitivity:</b> pack size {10, 30, 60}, schedule {linear, nonlinear, exponential}, a₀ {1.5, 2.0, 2.5}, on the base
+and stress scenarios. <b>Stress:</b> σ ∈ {1, 3, 5} dB × {20, 16 microphones} on the fixed data set, plus 30 independent
+noise realisations (one run each). <b>Extra:</b> α-only ablation on 3 scenarios and on 10 instances (seeds
+4612 + 1000j) × N ∈ {10, 30}; λ<sub>obs</sub> ∈ {0, 1, 10², 10⁴}; robustness on 10 further instances.</p>
+
+<h2>5. Results</h2>
+<table class="avoid">
+<tr><th>Base (σ = 1 dB, 20 mics), 30 runs</th><th>F mean ± sd</th><th>median</th><th>best</th><th>worst</th>
+<th>‖ŝ−s‖ [m]</th><th>|Ŝ−S| [dB]</th><th>|α̂−α| [dB/m]</th><th>success</th><th>evals → ≤3 m</th></tr>
+<tr><td>GWO (N = 30, linear, a₀ = 2)</td><td>0.966 ± 0.069</td><td>0.954</td><td>0.882</td><td>1.176</td>
+<td>2.01 ± 1.02</td><td>1.03</td><td>0.035</td><td>23 %</td><td>2,775 (87 %)</td></tr>
+<tr><td>Random search</td><td>2.762 ± 0.979</td><td>2.521</td><td>1.232</td><td>5.248</td>
+<td>4.71 ± 1.98</td><td>1.42</td><td>0.055</td><td>0 %</td><td>5,610 (23 %)</td></tr>
+<tr><td>Rank-sum p (GWO vs RS)</td><td colspan="4" style="text-align:center">2.9·10⁻¹¹</td><td>1.1·10⁻⁷</td><td>0.27</td><td>0.038</td><td></td><td></td></tr>
+</table>
+<p>F* = 0.882 (x<sub>ML</sub> is 0.97 m from the truth). GWO's <i>worst</i> run beats random search's <i>best</i>: RS samples
+the 5-D box blindly and almost never hits the narrow low-misfit valley, while GWO concentrates samples around the
+three best points and shrinks its steps as a → 0. The S error difference is not significant because S is tied to α
+and range (corr 0.94): near-optimal fits still trade one for the other. Only 23 % of GWO runs end within 1 m of
+x<sub>ML</sub> although 67 % reach F* + 0.1σ² — moving metres along the flat valley floor costs ~0.05 dB², below what
+GWO resolves in 9,000 evaluations; since x<sub>ML</sub> itself is ~1 m from the truth and the CRB is 3.4 m, this precision
+limit hardly matters for localisation. 8.4 % of GWO evaluations entered the obstacle and 5.8 % had α &lt; 0, yet no
+final GWO estimate is infeasible (one RS run ended slightly inside the box).</p>
+
+<div class="avoid">
+<figure><img src="../figures/fig01_scene_3d.png"><figcaption>Fig. 1 — Scene: microphones, obstacle, true source (★) and 30 final
+estimates per method. GWO's estimates spread mainly in z, the least observable coordinate.</figcaption></figure>
+</div>
+<figure class="avoid"><img src="../figures/fig02_convergence.png"><figcaption>Fig. 2 — Mean ± sd best-so-far F − F* per evaluation (log–log).
+The methods stay close for the first ~50–100 evaluations, then GWO's information sharing opens a 1–2 order-of-magnitude gap.
+Under stress the floor is 10× higher and the landscape smoother, so curves flatten earlier.</figcaption></figure>
+
+<h3>Parameter sensitivity (30 runs per setting, 9,000 evaluations each)</h3>
+<table class="avoid">
+<tr><th>Setting</th><th>N=10</th><th>N=30</th><th>N=60</th><th>linear</th><th>nonlinear</th><th>exponential</th><th>a₀=1.5</th><th>a₀=2.0</th><th>a₀=2.5</th></tr>
+<tr><td>Base: F mean</td><td>0.969</td><td>0.966</td><td>1.015</td><td>0.966</td><td>0.980</td><td>1.003</td><td>0.990</td><td>0.966</td><td>0.951</td></tr>
+<tr><td>Base: ‖ŝ−s‖ mean [m]</td><td>2.09</td><td>2.01</td><td>2.78</td><td>2.01</td><td>2.31</td><td>2.32</td><td>2.62</td><td>2.01</td><td>1.80</td></tr>
+<tr><td>Base: evals to F target (median)</td><td>6,856</td><td>7,689</td><td>6,811</td><td>7,689</td><td>8,232</td><td>3,221</td><td>7,845</td><td>7,689</td><td>7,594</td></tr>
+<tr><td>Stress: success (≤1 m of x<sub>ML</sub>)</td><td>43 %</td><td>37 %</td><td>57 %</td><td>37 %</td><td>53 %</td><td>17 %</td><td>7 %</td><td>37 %</td><td>43 %</td></tr>
+</table>
+<p>At a fixed budget, N = 60 leaves only 149 iterations for the a(t) schedule to refine (worst at σ = 1) but its diversity
+wins under stress (best success, 57 %). The exponential schedule reaches the F target 2.4× faster but is the least
+reliable (17 % success under stress): a(t) falls below 1 after ≈ 40 iterations, ending exploration early. a₀ = 1.5
+under-explores (|A| &gt; 1 only in the first third of the run); a₀ = 2.5 and the nonlinear schedule, which lengthen the
+|A| &gt; 1 phase, are the best settings on this flat, coupled landscape (box plots: <code>fig04/05_*</code>).</p>
+
+<figure class="avoid"><img src="../figures/fig07_a_A_diversity.png"><figcaption>Fig. 3 — a(t) schedules; mean |A| and the fraction of moves with |A| &gt; 1,
+which hits zero exactly when a crosses 1 (iteration 150); pack diversity decays slowly while |A| &gt; 1 is possible and
+fast afterwards, collapsing only as a → 0.</figcaption></figure>
+
+<h2>6. Stress test</h2>
+<table class="avoid">
+<tr><th>Scenario</th><th>F*</th><th>GWO F mean</th><th>RS F mean</th><th>GWO ‖ŝ−s‖ (fixed data)</th><th>GWO RMSE over 30 noise draws</th><th>RS RMSE</th><th>CRB RMSE</th><th>GWO |Ŝ−S| / |α̂−α| (draws)</th></tr>
+<tr><td>σ=1, 20 mics (base)</td><td>0.88</td><td>0.97</td><td>2.76</td><td>2.01 m</td><td>3.03 m</td><td>5.03 m</td><td>3.40 m</td><td>0.91 dB / 0.040</td></tr>
+<tr><td>σ=3, 20 mics</td><td>8.22</td><td>8.47</td><td>10.62</td><td>2.45 m</td><td>4.87 m</td><td>5.82 m</td><td>10.19 m</td><td>1.82 / 0.079</td></tr>
+<tr><td>σ=1, 16 mics</td><td>1.08</td><td>1.20</td><td>2.79</td><td>1.89 m</td><td>2.98 m</td><td>4.71 m</td><td>3.57 m</td><td>1.02 / 0.038</td></tr>
+<tr><td><b>σ=3, 16 mics (stress)</b></td><td>10.17</td><td>10.46</td><td>12.34</td><td>2.07 m</td><td>4.97 m</td><td>6.58 m</td><td>10.72 m</td><td>2.13 / 0.080</td></tr>
+<tr><td>σ=5, 16 mics</td><td>29.00</td><td>29.37</td><td>31.50</td><td>2.38 m</td><td>6.59 m</td><td>7.87 m</td><td>17.87 m</td><td>3.83 / 0.142</td></tr>
+</table>
+<p>GWO beats RS in every scenario (p &lt; 10⁻⁶ for F and location). <b>What degraded and why.</b>
+<i>Noise floor:</i> F* scales with σ², and the CRB position RMSE scales linearly with σ (3.4 → 10.2 m); over 30 noise
+draws GWO's RMSE grows 3.0 → 5.0 → 6.6 m and the S and α errors roughly quadruple. <i>Geometry/observability:</i>
+removing microphones {0, 14, 18, 19} raises the CRB by only ≈ 5 % but increases corr(S, α) from 0.943 to 0.957 — the
+array loses mostly the range diversity that separates S from α. <i>S–α–distance coupling:</i> on the fixed data set
+the location barely moves (2.0 → 2.4 m) but the parameters do: at σ ≥ 3 the ML solution pins α at its physical bound 0
+and lowers S by 2.5 dB, absorbing the noise by trading attenuation against level (GWO, finding this biased ML
+solution, has an even larger S error than scattered RS). At σ ≥ 3 the errors fall <i>below</i> the CRB because the
+box (z ∈ [0,10], α ≥ 0) caps the estimate: the estimator is biased but its spread is bounded. The optimisation itself
+does not get harder — GWO hits F* + 0.1σ² in 100 % of stress runs, median 2,995 evaluations — the <i>estimation</i>
+does. Leader diversity (Fig. 5) stays higher for longer under noise: a flatter valley holds more near-equivalent candidates.</p>
+<figure class="avoid"><img src="../figures/fig14_stress_noise_mc.png"><figcaption>Fig. 4 — Errors over 30 independent noise realisations per scenario
+(σ / number of microphones); bars mark the CRB RMSE. Noise, not microphone count, drives the degradation.</figcaption></figure>
+
+<h2>7. Interpretation: do three leaders protect against one noisy candidate?</h2>
+<p><b>Primary instance: no — α-only is better.</b> Localisation 1.36 ± 0.45 vs 2.01 ± 1.02 m (base, p = 0.008),
+1.59 ± 0.20 vs 2.07 ± 0.73 m (stress, p = 0.029), 2.07 ± 0.13 vs 2.38 ± 0.41 m (σ = 5, p = 0.0015), with lower spread of
+final estimates. The three-leader mechanism is visible but does not pay off: averaging three independent moves
+lowers step variance (mid-run diversity 0.27 vs 0.35) and aims the pack at the centroid of α, β, δ, which on a curved
+valley lies off the floor; in the second half the three-leader α is &gt; 3 m from x<sub>ML</sub> 11–20 % of the time vs
+≤ 4 % for α-only. α is replaced by a distant "lucky" candidate ≈ 5 times per run in both variants, but on this
+single-funnel instance those candidates are in the right basin, so greedy following is not punished. Leaders never
+reach premature consensus: they agree to &lt; 1 m only after ≈ 250 iterations (Fig. 5).
+<b>Across 10 instances (σ = 3, 16 mics):</b> with a small pack (N = 10) three leaders win on 6/10 instances (mean
+F − F* 0.84 vs 1.08 dB²) and avert a catastrophe on instance 6612 (worst run 3.2 vs 24.4 dB²) — with 10 wolves an α-only
+pack follows one misleading fit wholesale, while averaging caps any single leader's pull at one third. With N = 30 α-only
+is better on 7/10 instances and ends far from x<sub>ML</sub> less often (17 % vs 25 %, signed-rank p = 0.008).
+<b>Conclusion:</b> the three-leader rule is insurance against a single misleading leader that matters when diversity is
+scarce; when the pack is already diverse it costs exploitation precision.</p>
+<figure class="avoid"><img src="../figures/fig08_leader_consensus.png"><figcaption>Fig. 5 — Leader consensus (mean pairwise distance α–β–δ, median and IQR over
+30 runs) for base, stress and σ = 5. No premature consensus; noisier data keep the leaders apart longer.</figcaption></figure>
+
+<h2>8. Discussion</h2>
+<p><b>Exploration vs exploitation.</b> With linear a(t) and a₀ = 2, half of all moves have |A| &gt; 1 at the start and none
+after iteration 150 (a = 1). Leader paths (fig06) show long jumps across the hall in that first phase and short refining
+moves afterwards; diversity drops sharply after the switch. Schedules that shorten the |A| &gt; 1 phase (exponential, a₀ = 1.5)
+converge fast but stall; those that lengthen it (nonlinear, a₀ = 2.5) are the most accurate here.
+<b>Robustness across seeds and noise.</b> Over 30 run seeds GWO's F spread is 14× smaller than RS's. On 10 further
+instances GWO has the lower median error on 9/10 at σ = 1, but only 4/10 under stress: when the CRB is ≈ 7 m the ML
+estimate itself is metres from the truth, so better fitting no longer means better localising — the limit is
+information, not optimisation. <b>Speed.</b> GWO's incumbent stays within 3 m of the source after a median 2,775
+evaluations (87 % of runs) vs 5,610 for RS (23 %); the F target is reached after 7,689 evaluations at σ = 1 and 2,995 under
+stress. <b>Failure modes</b> (fig15, failure table): (i) <i>stagnation when a(t) decays too fast</i> — exponential decay leaves
+77 % of stress runs short of F* (57 % linear); (ii) <i>obstacle-boundary solution</i> — on instance 5612 the ML optimum lies on
+the obstacle roof (z = 4.49 m, top 4.5 m), 7 m from the source, and runs split between two faces of the box;
+(iii) <i>S–α–distance ambiguity</i> — on instance 13612 x<sub>ML</sub> is 6.6 m from the truth with α̂ = 0.32 vs 0.11 dB/m: a closer,
+more strongly attenuated source explains the data equally well, and 43 % of runs stop in the flat valley between.
+(ii) and (iii) are properties of the data: a better optimiser converges more reliably to the wrong-but-optimal answer.
+<b>λ check:</b> λ<sub>obs</sub> ∈ {0, 1, 10², 10⁴} leaves no estimate inside the box on instance 4612 (constraint inactive at the
+optimum); 10⁴ is slightly worse (2.11 vs 1.9 m) because a steep wall makes the region next to the box harder to explore.</p>
+<figure class="avoid"><img src="../figures/fig15_failure_cases.png"><figcaption>Fig. 6 — Failure modes: obstacle-boundary ML solution (instance 5612) and
+S–α–distance ambiguity (instance 13612); colour = log₁₀(F − F*) of each run's final estimate.</figcaption></figure>
+
+<h2>9. Conclusion</h2>
+<p>A from-scratch GWO with reflection bounds and a graded depth penalty solves the 5-parameter localisation problem
+far better than random search at the same 9,000-evaluation budget (F 0.97 vs 2.76 dB², error 2.0 vs 4.7 m, p ≤ 10⁻⁷) and
+reaches near-CRB accuracy at σ = 1. Its accuracy is limited by the S–α–distance coupling and the poor vertical
+observability of the array, not by the search: under 3–5 dB noise both GWO and any estimator degrade, and errors are then
+set by the noise floor and the parameter bounds. Longer exploration (a₀ = 2.5, nonlinear a(t)) helps, fast decay hurts.
+The canonical three-leader guidance is robustness insurance for small packs rather than a universal gain: on the primary
+instance an α-only pack is more precise. Natural extensions are a final local polish (e.g. Nelder–Mead from α) to resolve
+the flat valley, and a reparameterisation (e.g. S − α·r̄) to decorrelate S and α.</p>
+</body>
+</html>
