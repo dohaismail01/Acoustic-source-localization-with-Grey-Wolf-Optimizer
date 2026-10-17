@@ -43,8 +43,9 @@ attenuation α — five continuous unknowns, coupled non-linearly through distan
 measurement noise. The misfit landscape is smooth but contains a long, flat, curved valley (S, α and
 range can partly compensate each other) and an obstacle the source cannot be inside. We solve it with a
 from-scratch Grey Wolf Optimizer (GWO), compare it with random search at an identical budget,
-study its parameters, stress it with more noise and fewer microphones, and ablate its three-leader
-guidance. Every number below is reproducible from seed 4612.</p>
+study its parameters, stress it with more noise, fewer microphones, impulsive <i>shot noise</i> and different source
+locations, ask which parameter drives the objective most, and ablate its three-leader guidance. Every number below is
+reproducible from seed 4612.</p>
 
 <h2>2. Problem formulation</h2>
 <p><b>Instance (seed 4612).</b> One generator <code>default_rng(4612)</code> draws, in order: the obstacle
@@ -76,6 +77,13 @@ L-BFGS-B, and the Cramér–Rao bound (CRB) J⁻¹ with J = GᵀG/σ², G = ∂L
 achievable unbiased position RMSE and the parameter correlations. Base case: CRB position RMSE 3.4 m, dominated
 by z (σ<sub>z</sub> = 3.2 m vs σ<sub>x</sub> = 0.97, σ<sub>y</sub> = 0.58 m — the array spans only 10 m vertically);
 corr(S, α) = 0.94; cond(G) ≈ 340.</p>
+<p><b>Which parameter affects f(x) most?</b> At the best fit, a change of 10 % of each parameter's range raises f by:
+<b>S 36.0</b> dB² &gt; s<sub>y</sub> 4.1 &gt; s<sub>x</sub> 2.1 &gt; α 0.82 &gt; <b>s<sub>z</sub> 0.02</b> dB² (per unit: 1 dB of S → +1.0 dB²;
+1 m of y/x/z → +0.17 / 0.09 / 0.013 dB²). S shifts every predicted level equally, so ΔS raises f by exactly ΔS². The height
+changes f about 2,000× less than S, because the microphones span only 10 m vertically while horizontal distances are about 20 m;
+the weakest curvature direction is almost pure z (component 0.996). Being influential is not the same as being
+identifiable: S is the most influential parameter on its own, yet it is hard to estimate jointly because α and range
+compensate it.</p>
 
 <h2>3. Method</h2>
 <p><b>GWO.</b> The three best positions found so far are the leaders α, β, δ (elitist: best three of old leaders ∪
@@ -97,8 +105,11 @@ final estimate within 1 m of x<sub>ML</sub>; speed = evaluations until best-so-f
 after which the incumbent stays within 3 m (≈ base CRB) of the source; Wilcoxon rank-sum tests.
 <b>Sensitivity:</b> pack size {10, 30, 60}, schedule {linear, nonlinear, exponential}, a₀ {1.5, 2.0, 2.5}, on the base
 and stress scenarios. <b>Stress:</b> σ ∈ {1, 3, 5} dB × {20, 16 microphones} on the fixed data set, plus 30 independent
-noise realisations (one run each). <b>Extra:</b> α-only ablation on 3 scenarios and on 10 instances (seeds
-4612 + 1000j) × N ∈ {10, 30}; λ<sub>obs</sub> ∈ {0, 1, 10², 10⁴}; robustness on 10 further instances.</p>
+noise realisations (one run each). <b>Shot noise:</b> random +6…15 dB spikes (probability p per microphone, own seed
+4612 + 7000), squared-error vs robust Huber loss, p ∈ {0, 0.1, 0.2, 0.3}. <b>Location:</b> 6 source positions × 30 noise
+draws plus CRB maps of the hall. <b>Parameter study:</b> N ∈ {10, 20, 30, 60} × a₀ ∈ {1.5, 2.0, 2.5}. <b>Extra:</b> α-only
+ablation on 3 scenarios and on 10 instances (seeds 4612 + 1000j) × N ∈ {10, 30}; λ<sub>obs</sub> ∈ {0, 1, 10², 10⁴};
+robustness on 10 further instances.</p>
 
 <h2>5. Results</h2>
 <table class="avoid">
@@ -139,11 +150,12 @@ Under stress the floor is 10× higher and the landscape smoother, so curves flat
 wins under stress (best success, 57 %). The exponential schedule reaches the F target 2.4× faster but is the least
 reliable (17 % success under stress): a(t) falls below 1 after ≈ 40 iterations, ending exploration early. a₀ = 1.5
 under-explores (|A| &gt; 1 only in the first third of the run); a₀ = 2.5 and the nonlinear schedule, which lengthen the
-|A| &gt; 1 phase, are the best settings on this flat, coupled landscape (box plots: <code>fig04/05_*</code>).</p>
+|A| &gt; 1 phase, are the best settings on this flat, coupled landscape (box plots: <code>fig04/05_*</code>).
+<b>Two-factor study</b> (N × a₀, hardest scenario σ = 3 dB, 16 mics + shot noise, 30 runs per cell): a₀ = 2.5 is the best
+column for <i>every</i> pack size (excess misfit 0.17–0.21 vs 0.26–0.39 dB², up to 40 % of runs at the best fit), so the
+interaction is weak; the best cell is N = 20, a₀ = 2.5. The localisation error stays at 5.4–6.2 m in every cell: it is set by
+the spike-biased optimum, not by the GWO settings (notebook Fig. 17).</p>
 
-<figure class="avoid"><img src="../figures/fig07_a_A_diversity.png"><figcaption>Fig. 3 — a(t) schedules; mean |A| and the fraction of moves with |A| &gt; 1,
-which hits zero exactly when a crosses 1 (iteration 150); pack diversity decays slowly while |A| &gt; 1 is possible and
-fast afterwards, collapsing only as a → 0.</figcaption></figure>
 
 <h2>6. Stress test</h2>
 <table class="avoid">
@@ -164,9 +176,32 @@ and lowers S by 2.5 dB, absorbing the noise by trading attenuation against level
 solution, has an even larger S error than scattered RS). At σ ≥ 3 the errors fall <i>below</i> the CRB because the
 box (z ∈ [0,10], α ≥ 0) caps the estimate: the estimator is biased but its spread is bounded. The optimisation itself
 does not get harder — GWO hits F* + 0.1σ² in 100 % of stress runs, median 2,995 evaluations — the <i>estimation</i>
-does. Leader diversity (Fig. 5) stays higher for longer under noise: a flatter valley holds more near-equivalent candidates.</p>
-<figure class="avoid"><img src="../figures/fig14_stress_noise_mc.png"><figcaption>Fig. 4 — Errors over 30 independent noise realisations per scenario
+does. Leader diversity (notebook Fig. 8) stays higher for longer under noise: a flatter valley holds more near-equivalent candidates.</p>
+<figure class="avoid"><img src="../figures/fig14_stress_noise_mc.png"><figcaption>Fig. 3 — Errors over 30 independent noise realisations per scenario
 (σ / number of microphones); bars mark the CRB RMSE. Noise, not microphone count, drives the degradation.</figcaption></figure>
+
+<h3>Shot noise (impulsive spikes)</h3>
+<p>Short loud events (a door slam, a cough next to a microphone) add <i>positive</i> spikes: L<sub>i</sub><sup>meas</sup> += b<sub>i</sub>·u<sub>i</sub>,
+b<sub>i</sub> ~ Bernoulli(p), u<sub>i</sub> ~ U(6, 15) dB. With p = 0.15 the seed hits microphones 14 (+10.7 dB) and 17 (+9.6 dB).
+A 10 dB spike costs 100 dB² in the squared error, as much as 100 microphones that are off by 1 dB, so the ML optimum moves
+<b>7.7 m</b> away from the source: a louder reading looks like a closer source. GWO finds that optimum well, but its error
+vs the truth (6.8 m) is <b>no better than random search</b> (6.3 m, p = 0.66): an exact solution of a biased objective is still
+wrong. A robust <b>Huber loss</b> (quadratic up to 2σ, linear beyond) restores 2.8 m (base) and 2.0 m (stress + shot).
+Over 30 noise draws the squared-error GWO RMSE grows 3.0 → 5.1 → 6.3 → 8.3 m for p = 0 → 0.3; Huber keeps 3.3 → 3.3 → 3.7 → 6.0 m.
+At p = 0 the squared error is slightly better (it is the true likelihood). At p = 0.3 even random search (7.9 m) beats
+squared-error GWO.</p>
+<figure class="avoid"><img src="../figures/fig16_shot_noise.png"><figcaption>Fig. 4 — Shot noise: the spiked microphones (left), error with and
+without spikes for squared-error GWO, Huber GWO and random search (middle), and the spike-probability sweep (right).</figcaption></figure>
+
+<h3>Where in the hall is the source hard to find?</h3>
+<p>Same σ = 3 dB and 16 microphones, six source positions, 30 noise draws each. Theory (CRB) says the <b>centre</b> of the
+array is easiest (4.5 m) and <b>corners</b> (21.8 m), the area <b>under the ceiling</b> (16.7 m) and the wall regions (≈ 11 m) are
+hardest, because there all microphones see the source from one side. GWO's RMSE ranges from 3.3 m (corner) to <b>6.7 m (under the
+ceiling</b>: the nearest microphone is 12.5 m away and all are below the source). In the corner GWO beats the CRB because the
+walls and the floor bound the estimate; the CRB ignores this prior information. GWO is significantly better than random search
+near the obstacle, at the wall and behind the obstacle (p ≤ 0.04), but not in the centre, corner or under the ceiling.</p>
+<figure class="avoid"><img src="../figures/fig19_stress_by_location.png"><figcaption>Fig. 5 — Stress by location: maps of the theoretical
+best error at two source heights (darker = harder; numbered dots = tested positions) and GWO / random-search errors per position.</figcaption></figure>
 
 <h2>7. Interpretation: do three leaders protect against one noisy candidate?</h2>
 <p><b>Primary instance: no — α-only is better.</b> Localisation 1.36 ± 0.45 vs 2.01 ± 1.02 m (base, p = 0.008),
@@ -176,19 +211,17 @@ lowers step variance (mid-run diversity 0.27 vs 0.35) and aims the pack at the c
 valley lies off the floor; in the second half the three-leader α is &gt; 3 m from x<sub>ML</sub> 11–20 % of the time vs
 ≤ 4 % for α-only. α is replaced by a distant "lucky" candidate ≈ 5 times per run in both variants, but on this
 single-funnel instance those candidates are in the right basin, so greedy following is not punished. Leaders never
-reach premature consensus: they agree to &lt; 1 m only after ≈ 250 iterations (Fig. 5).
+reach premature consensus: they agree to &lt; 1 m only after ≈ 250 iterations (notebook Fig. 8).
 <b>Across 10 instances (σ = 3, 16 mics):</b> with a small pack (N = 10) three leaders win on 6/10 instances (mean
 F − F* 0.84 vs 1.08 dB²) and avert a catastrophe on instance 6612 (worst run 3.2 vs 24.4 dB²) — with 10 wolves an α-only
 pack follows one misleading fit wholesale, while averaging caps any single leader's pull at one third. With N = 30 α-only
 is better on 7/10 instances and ends far from x<sub>ML</sub> less often (17 % vs 25 %, signed-rank p = 0.008).
 <b>Conclusion:</b> the three-leader rule is insurance against a single misleading leader that matters when diversity is
 scarce; when the pack is already diverse it costs exploitation precision.</p>
-<figure class="avoid"><img src="../figures/fig08_leader_consensus.png"><figcaption>Fig. 5 — Leader consensus (mean pairwise distance α–β–δ, median and IQR over
-30 runs) for base, stress and σ = 5. No premature consensus; noisier data keep the leaders apart longer.</figcaption></figure>
 
 <h2>8. Discussion</h2>
 <p><b>Exploration vs exploitation.</b> With linear a(t) and a₀ = 2, half of all moves have |A| &gt; 1 at the start and none
-after iteration 150 (a = 1). Leader paths (fig06) show long jumps across the hall in that first phase and short refining
+after iteration 150 (a = 1; notebook Fig. 7). Leader paths (notebook Fig. 6) show long jumps across the hall in that first phase and short refining
 moves afterwards; diversity drops sharply after the switch. Schedules that shorten the |A| &gt; 1 phase (exponential, a₀ = 1.5)
 converge fast but stall; those that lengthen it (nonlinear, a₀ = 2.5) are the most accurate here.
 <b>Robustness across seeds and noise.</b> Over 30 run seeds GWO's F spread is 14× smaller than RS's. On 10 further
@@ -210,11 +243,14 @@ S–α–distance ambiguity (instance 13612); colour = log₁₀(F − F*) of ea
 <h2>9. Conclusion</h2>
 <p>A from-scratch GWO with reflection bounds and a graded depth penalty solves the 5-parameter localisation problem
 far better than random search at the same 9,000-evaluation budget (F 0.97 vs 2.76 dB², error 2.0 vs 4.7 m, p ≤ 10⁻⁷) and
-reaches near-CRB accuracy at σ = 1. Its accuracy is limited by the S–α–distance coupling and the poor vertical
-observability of the array, not by the search: under 3–5 dB noise both GWO and any estimator degrade, and errors are then
-set by the noise floor and the parameter bounds. Longer exploration (a₀ = 2.5, nonlinear a(t)) helps, fast decay hurts.
-The canonical three-leader guidance is robustness insurance for small packs rather than a universal gain: on the primary
-instance an α-only pack is more precise. Natural extensions are a final local polish (e.g. Nelder–Mead from α) to resolve
-the flat valley, and a reparameterisation (e.g. S − α·r̄) to decorrelate S and α.</p>
+reaches near-CRB accuracy at σ = 1. Its accuracy is limited by the physics, not by the search. The height z changes the misfit
+about 2,000× less than S, and S, α and distance compensate each other. Under 3–5 dB noise any estimator degrades. Accuracy
+also depends on where the source is: best in the centre of the array, worst under the ceiling and outside the array. Impulsive
+shot noise is the most damaging stressor: two spikes move the squared-error optimum 7.7 m, and only a robust (Huber) objective
+recovers 2–3 m accuracy. With a biased objective, a better optimiser just finds the wrong answer more reliably. Longer
+exploration (a₀ = 2.5, nonlinear a(t)) helps for every pack size; fast decay hurts. The three-leader guidance is robustness
+insurance for small packs rather than a universal gain. <b>Recommendation:</b> GWO with a₀ ≈ 2.5 and 20–30 wolves, a Huber misfit
+whenever spikes are possible, and microphones that surround the expected source region at several heights. Natural extensions
+are a final local polish to resolve the flat valley and a reparameterisation (e.g. S − α·r̄) to decorrelate S and α.</p>
 </body>
 </html>
