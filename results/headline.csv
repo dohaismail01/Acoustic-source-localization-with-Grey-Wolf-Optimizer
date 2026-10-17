@@ -1,6 +1,0 @@
-experiment,GWO,random_search,GWO_huber
-"Main, base: mean F [dB²]",0.965613499336593,2.7624308663909125,
-"Main, base: mean error [m]",2.0076160138560977,4.708870379312027,
-"Stress σ3/16, 30 noise draws: RMSE [m]",4.966501300613773,6.576632371981902,
-Stress σ3/16 + shot noise: mean error [m],5.621354005267803,8.08693698067158,
-"Shot noise p=0.3, 30 draws: RMSE [m]",8.329290128812447,7.923432516726427,6.038591760466127
